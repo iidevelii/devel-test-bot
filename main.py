@@ -12,7 +12,8 @@ devel_test_bot — بوت اختبار استراتيجية DEVEL_MASTER
 
 import os, time, json, asyncio, logging, requests, numpy as np
 from datetime import datetime, timezone
-from telegram import Bot
+from telegram import Bot, InputMediaPhoto
+from chart_generator import generate_chart
 
 # ── إعدادات من .env ──────────────────────────────────────────
 TELEGRAM_TOKEN    = os.getenv("TEST_BOT_TOKEN", "")       # توكن بوت الاختبار
@@ -136,36 +137,65 @@ def analyze(symbol, market="futures", tf="4h"):
     )
 
 # ── تنسيق رسالة الإشارة ──────────────────────────────────────
-EMOJI = {"LONG": "🟢", "SHORT": "🔴"}
-MKT_EMOJI = {"futures": "📊", "spot": "💰"}
+SOURCES_AR = {
+    "CLASSIC":      "اختراق ترند كلاسيكي",
+    "DOWNTREND_BRK":"كسر ترند هابط طويل",
+    "UPTREND_BRK":  "كسر ترند صاعد طويل",
+    "FIB":          "اختراق مستوى فيبوناتشي",
+    "SR_RETEST":    "إعادة اختبار دعم/مقاومة",
+    "OB":           "منطقة Order Block (ICT)",
+    "FVG":          "Fair Value Gap (ICT)",
+    "SWEEP":        "اصطياد سيولة Liquidity Sweep",
+    "BOS":          "كسر هيكل السوق BOS",
+    "WYCKOFF_ACC":  "تراكم Wyckoff Accumulation",
+    "WYCKOFF_DIST": "توزيع Wyckoff Distribution",
+    "CDL":          "نموذج شمعة ياباني",
+    "MOM":          "زخم مؤكد Momentum",
+}
 
-def format_signal(sig: dict) -> str:
-    side  = sig["side"]
-    mkt   = sig["market"].lower()
-    entry = sig["entry"]
-    sl    = sig["sl"]
-    tp    = sig["tp"]
-    rr    = sig["rr"]
-    score = sig["score"]
-    src   = ", ".join(sig.get("sources", [])[:5])
-    rsi   = sig.get("rsi", 0)
-    adx   = sig.get("adx", 0)
-    sl_pct= abs(entry-sl)/entry*100
-    tp_pct= abs(tp-entry)/entry*100
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+def sources_to_arabic(sources: list) -> str:
+    lines = []
+    for src in sources:
+        key = src.split("+")[0].upper()
+        ar = next((v for k,v in SOURCES_AR.items() if k in key), src)
+        lines.append(f"  • {ar}")
+    return "\n".join(lines) if lines else "  • DEVEL_MASTER"
+
+def format_caption(sig: dict) -> str:
+    side   = sig["side"]
+    mkt    = sig["market"].lower()
+    entry  = sig["entry"]
+    sl     = sig["sl"]
+    tp     = sig["tp"]
+    rr     = sig["rr"]
+    score  = sig["score"]
+    sources= sig.get("sources", [])
+    rsi    = sig.get("rsi", 0)
+    adx    = sig.get("adx", 0)
+    sl_pct = abs(entry-sl)/entry*100
+    tp_pct = abs(tp-entry)/entry*100
+    now    = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    side_ar = "شراء" if side=="LONG" else "بيع"
+    emo     = "🟢" if side=="LONG" else "🔴"
+    mkt_emo = "📊" if mkt=="futures" else "💰"
 
     return (
-        f"{EMOJI[side]} <b>DEVEL MASTER — {side}</b>\n"
-        f"{MKT_EMOJI[mkt]} {sig['symbol']} | {mkt.upper()}\n\n"
-        f"📍 <b>Entry:</b> <code>{entry:.4f}</code>\n"
-        f"🛡 <b>SL:</b> <code>{sl:.4f}</code> (-{sl_pct:.1f}%)\n"
-        f"🎯 <b>TP:</b> <code>{tp:.4f}</code> (+{tp_pct:.1f}%)\n"
-        f"⚖️ <b>R:R:</b> 1:{rr}\n\n"
-        f"📊 <b>Score:</b> {score:.1f}/10\n"
-        f"📈 RSI: {rsi:.0f} | ADX: {adx:.0f}\n"
-        f"🔍 <b>Sources:</b> {src}\n\n"
+        f"{emo} <b>DEVEL_MASTER — {side_ar} ({side})</b>\n"
+        f"{mkt_emo} <b>{sig['symbol']}</b> | {mkt.upper()} | 4H\n"
+        f"{'─'*30}\n"
+        f"📍 <b>الدخول:</b> <code>{entry:.6f}</code>\n"
+        f"🛡 <b>وقف الخسارة:</b> <code>{sl:.6f}</code> <i>(-{sl_pct:.2f}%)</i>\n"
+        f"🎯 <b>الهدف:</b> <code>{tp:.6f}</code> <i>(+{tp_pct:.2f}%)</i>\n"
+        f"⚖️ <b>نسبة R:R:</b> 1:{rr}\n"
+        f"{'─'*30}\n"
+        f"📊 <b>قوة الإشارة:</b> {score:.1f}/10\n"
+        f"📈 <b>RSI:</b> {rsi:.0f}   |   <b>ADX:</b> {adx:.0f}\n"
+        f"{'─'*30}\n"
+        f"🔍 <b>أسباب الدخول:</b>\n"
+        f"{sources_to_arabic(sources)}\n"
+        f"{'─'*30}\n"
         f"⏰ {now}\n"
-        f"<i>Test signal — not financial advice</i>"
+        f"<i>⚠️ إشارة اختبار — ليست توصية استثمارية</i>"
     )
 
 # ── تتبع الإشارات (في الذاكرة) ──────────────────────────────
@@ -221,12 +251,36 @@ async def run_scanner(bot: Bot):
                 key = f"{symbol}_{market}"
                 if key in active_signals: continue
 
-                msg = format_signal(sig)
-                await bot.send_message(
-                    chat_id=TEST_CHANNEL_ID,
-                    text=msg,
-                    parse_mode="HTML"
-                )
+                # توليد الشارت
+                chart_buf = None
+                try:
+                    raw_data = fetch_klines(symbol, "4h", 100, market)
+                    if raw_data:
+                        chart_buf = generate_chart(
+                            symbol,
+                            raw_data["closes"], raw_data["highs"],
+                            raw_data["lows"],   raw_data["opens"],
+                            raw_data["volumes"],
+                            sig
+                        )
+                except Exception as chart_err:
+                    log.warning(f"Chart error {symbol}: {chart_err}")
+
+                caption = format_caption(sig)
+
+                if chart_buf:
+                    await bot.send_photo(
+                        chat_id=TEST_CHANNEL_ID,
+                        photo=chart_buf,
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=TEST_CHANNEL_ID,
+                        text=caption,
+                        parse_mode="HTML"
+                    )
                 active_signals[key] = sig
                 signals_sent += 1
                 log.info(f"Signal sent: {symbol} {market} {sig['side']} score={sig['score']:.1f}")
@@ -244,10 +298,12 @@ async def run_scanner(bot: Bot):
         emoji  = "✅" if result=="WIN" else "❌"
         entry  = sig_data["entry"]
         exit_p = sig_data.get("exit_price",0)
+        pnl    = ((exit_p-entry)/entry*100) if sig_data["side"]=="LONG" else ((entry-exit_p)/entry*100)
         msg = (
-            f"{emoji} **نتيجة {sym}**\n"
-            f"الدخول: `{entry:.4f}` → الخروج: `{exit_p:.4f}`\n"
-            f"النتيجة: **{result}**"
+            f"{emoji} <b>نتيجة {sym.split('_')[0]}</b>\n"
+            f"الدخول: <code>{entry:.6f}</code> ← الخروج: <code>{exit_p:.6f}</code>\n"
+            f"PnL: <b>{pnl:+.2f}%</b>\n"
+            f"النتيجة: <b>{result}</b>"
         )
         try:
             await bot.send_message(chat_id=TEST_CHANNEL_ID, text=msg, parse_mode="HTML")
