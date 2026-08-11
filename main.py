@@ -17,6 +17,8 @@ from chart_generator import generate_chart, generate_outcome_chart, generate_nea
 from mtf_futures_engine import analyze_mtf_futures
 from elite_spot_strategy import analyze_elite_spot
 from smc_vwap_institutional_engine import analyze_smc_vwap_institutional
+from futures_spot_dip_engine import analyze_dip_sweep
+
 
 
 
@@ -42,10 +44,11 @@ SPOT_API = "https://api.binance.com"
 SYMBOLS = [
     "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","XLMUSDT","NEARUSDT",
     "LDOUSDT","DOTUSDT","LINKUSDT","AVAXUSDT","LTCUSDT","TRXUSDT","SUIUSDT",
-    "INJUSDT","APTUSDT","ARBUSDT","SYNUSDT","HBARUSDT","KAITOUSDT","BANKUSDT",
-    "COHRUSDT","1000BONKUSDT","SHELLUSDT","FETCHUSDT","STXUSDT","RUNEUSDT",
+    "INJUSDT","APTUSDT","ARBUSDT","SYNUSDT","HBARUSDT","STXUSDT","RUNEUSDT",
     "ICPUSDT","FTMUSDT","OPUSDT","TIAUSDT","MATICUSDT","ATOMUSDT","UNIUSDT",
-    "RENDERUSDT","WIFUSDT","PEPEUSDT","FLOKIUSDT","ETCUSDT","DOGEUSDT",
+    "RENDERUSDT","WIFUSDT","PEPEUSDT","FLOKIUSDT","ETCUSDT","DOGEUSDT","SHIBUSDT",
+    "FILUSDT","BCHUSDT","FETUSDT","GALAUSDT","SANDUSDT","AXSUSDT","AAVEUSDT",
+    "MKRUSDT","COMPUSDT","KASUSDT"
 ]
 
 # ── المؤشرات ─────────────────────────────────────────────────
@@ -601,6 +604,44 @@ async def run_scanner(bot: Bot):
                             save_signals_history(active_signals)
                             signals_sent += 1
                             log.info(f"SMC-VWAP Institutional Signal sent: {symbol} {market} {smc_sig['side']} AI_Score={smc_sig['ai_score']}")
+
+                # 5. فحص استراتيجية قنص التشبعات واصطياد السيولة (Extreme Dip & Sweep Engine - 4H & 1H)
+                raw_4h = fetch_klines(symbol, "4h", 120, market)
+                raw_1h_dip = fetch_klines(symbol, "1h", 120, market)
+                for tf_data, tf_name in [(raw_4h, "4H"), (raw_1h_dip, "1H")]:
+                    if tf_data:
+                        dip_sig = analyze_dip_sweep(
+                            symbol,
+                            tf_data["closes"], tf_data["highs"],
+                            tf_data["lows"],   tf_data["opens"],
+                            tf_data["volumes"], market
+                        )
+                        if dip_sig:
+                            dip_sig["tf"] = tf_name
+                            dip_key = f"DIP_{symbol}_{market}_{tf_name}_{dip_sig['side']}"
+                            if dip_key not in active_signals:
+                                chart_buf = None
+                                try:
+                                    chart_buf = generate_chart(
+                                        symbol,
+                                        tf_data["closes"], tf_data["highs"],
+                                        tf_data["lows"],   tf_data["opens"],
+                                        tf_data["volumes"],
+                                        dip_sig, lookback=80
+                                    )
+                                except Exception as chart_err:
+                                    log.warning(f"Chart error Dip Sweep {symbol}: {chart_err}")
+
+                                caption = format_caption(dip_sig)
+                                if chart_buf:
+                                    await bot.send_photo(chat_id=TEST_CHANNEL_ID, photo=chart_buf, caption=caption, parse_mode="HTML")
+                                else:
+                                    await bot.send_message(chat_id=TEST_CHANNEL_ID, text=caption, parse_mode="HTML")
+
+                                active_signals[dip_key] = dip_sig
+                                save_signals_history(active_signals)
+                                signals_sent += 1
+                                log.info(f"Extreme Dip & Sweep Signal sent: {symbol} {market} {tf_name} {dip_sig['side']} RSI={dip_sig['rsi']}")
 
                 await asyncio.sleep(0.3)
             except Exception as e:
