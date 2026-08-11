@@ -521,3 +521,115 @@ def generate_outcome_chart(
     buf.seek(0)
     return buf
 
+
+# ══════════════════════════════════════════════════════════════
+# شارت تنبيه الاقتراب من الهدف أو الستوب (Near TP / Near SL Chart)
+# ══════════════════════════════════════════════════════════════
+
+def generate_near_alert_chart(
+    symbol: str,
+    closes: list, highs: list, lows: list, opens: list, volumes: list,
+    sig_data: dict,
+    alert_type: str, # "NEAR_TP" أو "NEAR_SL"
+    rem_tp_pct: float,
+    rem_sl_pct: float,
+    lookback: int = 60
+) -> io.BytesIO:
+    """
+    يرسم شارت يوضح مدى قرب السعر الحالي من الهدف أو الستوب مع إظهار المتبقي بالـ %
+    """
+    n = min(lookback, len(closes))
+    C = np.array(closes[-n:], dtype=float)
+    H = np.array(highs[-n:], dtype=float)
+    L = np.array(lows[-n:], dtype=float)
+    O = np.array(opens[-n:], dtype=float)
+    V = np.array(volumes[-n:], dtype=float)
+    X = np.arange(len(C))
+
+    entry  = sig_data["entry"]
+    sl     = sig_data["sl"]
+    tp     = sig_data["tp"]
+    curr_p = C[-1]
+    side   = sig_data["side"]
+    market = sig_data.get("market", "FUTURES")
+
+    fig, (ax, ax_vol) = plt.subplots(
+        2, 1, figsize=(14, 8),
+        gridspec_kw={"height_ratios": [4, 1]},
+        facecolor=BG_COLOR
+    )
+    for a in (ax, ax_vol):
+        a.set_facecolor(BG_COLOR)
+        a.tick_params(colors=TEXT_COLOR, labelsize=8)
+        a.spines[["top","right","left","bottom"]].set_color(GRID_COLOR)
+        a.grid(color=GRID_COLOR, linewidth=0.5, alpha=0.7)
+        a.yaxis.tick_right()
+
+    # رسم الشموع
+    for i in X:
+        color = UP_COLOR if C[i] >= O[i] else DOWN_COLOR
+        ax.plot([i, i], [L[i], H[i]], color=color, linewidth=0.8, alpha=0.9)
+        body_h = abs(C[i] - O[i])
+        body_y = min(C[i], O[i])
+        rect = plt.Rectangle(
+            (i - 0.35, body_y), 0.7, max(body_h, (H[i]-L[i])*0.01),
+            facecolor=color, alpha=0.9, edgecolor=color
+        )
+        ax.add_patch(rect)
+
+    for i in X:
+        color = UP_COLOR if C[i] >= O[i] else DOWN_COLOR
+        ax.bar(i, V[i], color=color, alpha=0.5, width=0.7)
+    ax_vol.set_xlim(-1, len(X))
+
+    # خطوط Entry / SL / TP
+    ax.axhline(entry, color=ENTRY_COLOR, linewidth=1.5, linestyle="--", alpha=0.85)
+    ax.axhline(sl,    color=SL_COLOR,    linewidth=1.2, linestyle=":",  alpha=0.85)
+    ax.axhline(tp,    color=TP_COLOR,    linewidth=1.2, linestyle=":",  alpha=0.85)
+
+    # خط السعر الحالي المميز
+    curr_color = "#ffd54f" # أصفر مميز للسعر الحالي
+    ax.axhline(curr_p, color=curr_color, linewidth=2.0, linestyle="-", alpha=0.9)
+
+    last_idx = len(X) - 1
+    ax.scatter([last_idx], [curr_p], color=curr_color, s=140, zorder=7, marker="o")
+
+    # إضافة الملاحظة التوضيحية للمتبقي
+    if alert_type == "NEAR_TP":
+        hdr_txt = f"⏳ NEAR TARGET!  Only {rem_tp_pct:.2f}% to TP!"
+        hdr_clr = TP_COLOR
+        ax.annotate(f"  MEMBER ALERT: {rem_tp_pct:.2f}% to TP!",
+                    xy=(last_idx, curr_p), xytext=(last_idx-15, curr_p + (tp-curr_p)*0.5),
+                    arrowprops=dict(arrowstyle="->", color=TP_COLOR, lw=2),
+                    color=TP_COLOR, fontsize=9.5, fontweight="bold")
+    else:
+        hdr_txt = f"⚠️ NEAR STOP LOSS!  Only {rem_sl_pct:.2f}% to SL!"
+        hdr_clr = SL_COLOR
+        ax.annotate(f"  WARNING: {rem_sl_pct:.2f}% to SL!",
+                    xy=(last_idx, curr_p), xytext=(last_idx-15, curr_p - (curr_p-sl)*0.5),
+                    arrowprops=dict(arrowstyle="->", color=SL_COLOR, lw=2),
+                    color=SL_COLOR, fontsize=9.5, fontweight="bold")
+
+    price_range = max(H) - min(L)
+    ax.set_ylim(min(L) - price_range*0.05, max(H) + price_range*0.15)
+    ax.set_xlim(-1, len(X) + 3)
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.4f"))
+
+    ax.set_title(
+        f"DEVEL_MASTER ALERT  |  {symbol}  |  {market}  |  {side}\n"
+        f"{hdr_txt}   Current: {curr_p:.4f}   Target: {tp:.4f}   SL: {sl:.4f}",
+        color=hdr_clr, fontsize=10, pad=10,
+        fontweight="bold", fontfamily="sans-serif",
+        loc="left"
+    )
+
+    plt.tight_layout(rect=[0, 0, 0.88, 1])
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=130, bbox_inches="tight",
+                facecolor=BG_COLOR, edgecolor="none")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+

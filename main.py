@@ -13,8 +13,9 @@ devel_test_bot — بوت اختبار استراتيجية DEVEL_MASTER
 import os, time, json, asyncio, logging, requests, numpy as np
 from datetime import datetime, timezone
 from telegram import Bot, InputMediaPhoto
-from chart_generator import generate_chart, generate_outcome_chart
+from chart_generator import generate_chart, generate_outcome_chart, generate_near_alert_chart
 from mtf_futures_engine import analyze_mtf_futures
+
 
 
 # ── إعدادات من .env ──────────────────────────────────────────
@@ -286,19 +287,20 @@ def save_signals_history(signals_dict: dict):
 
 active_signals: dict = load_signals_history()
 
-def check_signal_outcomes() -> list:
+def check_signal_outcomes() -> tuple[list, list]:
     """
-    يتحقق من كافة الإشارات السابقة في الملف ويُرجع الإشارات التي حققت الهدف أو الستوب
+    يتحقق من كافة الإشارات السابقة:
+    1. الإشارات التي أغلقت (WIN / LOSS).
+    2. الإشارات التي اقتربت جداً من الهدف أو الستوب (بفارق 0.30% أو أقل).
     """
     global active_signals
     closed_events = []
+    near_alerts   = []
 
     for key, sig_data in list(active_signals.items()):
-        # إذا كانت الإشارة مغلقة سابقاً، لا تفحصها
         if sig_data.get("status") in ("WIN", "LOSS", "BE"):
             continue
 
-        # فحص كواشف البمب والدمب المنفصلة
         if key.startswith("PUMP_"):
             continue
 
@@ -323,21 +325,17 @@ def check_signal_outcomes() -> list:
         status = None
         exit_price = curr_val
 
-        # فحص وصول السعر للهدف أو الستوب
+        # فحص الوصول التام للهدف أو الستوب
         if side == "LONG":
             if high_val >= tp:
-                status = "WIN"
-                exit_price = tp
+                status = "WIN"; exit_price = tp
             elif low_val <= sl:
-                status = "LOSS"
-                exit_price = sl
+                status = "LOSS"; exit_price = sl
         else: # SHORT
             if low_val <= tp:
-                status = "WIN"
-                exit_price = tp
+                status = "WIN"; exit_price = tp
             elif high_val >= sl:
-                status = "LOSS"
-                exit_price = sl
+                status = "LOSS"; exit_price = sl
 
         if status:
             pnl_pct = ((exit_price - entry) / entry * 100) if side == "LONG" else ((entry - exit_price) / entry * 100)
@@ -345,13 +343,72 @@ def check_signal_outcomes() -> list:
             sig_data["exit_price"] = exit_price
             sig_data["pnl_pct"]    = round(pnl_pct, 2)
             sig_data["closed_at"]  = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
             closed_events.append(sig_data)
+        else:
+            # حساب المسافة المتبقية بالـ % للهدف والستوب
+            if side == "LONG":
+                rem_tp_pct = (tp - curr_val) / curr_val * 100
+                rem_sl_pct = (curr_val - sl) / curr_val * 100
+            else:
+                rem_tp_pct = (curr_val - tp) / curr_val * 100
+                rem_sl_pct = (sl - curr_val) / curr_val * 100
 
-    if closed_events:
+            # فحص إذا كان المتبقي للهدف 0.30% أو أقل ولم يُرسل تنبيه مسبقاً
+            if 0 < rem_tp_pct <= 0.30 and not sig_data.get("near_tp_sent"):
+                sig_data["near_tp_sent"] = True
+                sig_data["rem_tp_pct"]   = round(rem_tp_pct, 2)
+                sig_data["rem_sl_pct"]   = round(rem_sl_pct, 2)
+                sig_data["alert_type"]   = "NEAR_TP"
+                near_alerts.append(sig_data)
+
+            # فحص إذا كان المتبقي للستوب 0.30% أو أقل ولم يُرسل تنبيه مسبقاً
+            elif 0 < rem_sl_pct <= 0.30 and not sig_data.get("near_sl_sent"):
+                sig_data["near_sl_sent"] = True
+                sig_data["rem_tp_pct"]   = round(rem_tp_pct, 2)
+                sig_data["rem_sl_pct"]   = round(rem_sl_pct, 2)
+                sig_data["alert_type"]   = "NEAR_SL"
+                near_alerts.append(sig_data)
+
+    if closed_events or near_alerts:
         save_signals_history(active_signals)
 
-    return closed_events
+    return closed_events, near_alerts
+
+def format_near_alert_message(sig_data: dict) -> str:
+    sym        = sig_data["symbol"]
+    side       = sig_data["side"]
+    mkt        = sig_data.get("market", "FUTURES").upper()
+    alert_type = sig_data["alert_type"]
+    rem_tp     = sig_data.get("rem_tp_pct", 0.0)
+    rem_sl     = sig_data.get("rem_sl_pct", 0.0)
+    entry      = sig_data["entry"]
+    tp         = sig_data["tp"]
+    sl         = sig_data["sl"]
+    now        = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    side_ar = "شراء (LONG)" if side == "LONG" else "بيع (SHORT)"
+
+    if alert_type == "NEAR_TP":
+        hdr = "⏳🎯 <b>تنبيه اقتراب شديد من الهدف! (NEAR TARGET)</b> 🟢"
+        rem_str = f"باقي فقط <b>+{rem_tp:.2f}%</b> للوصول للهدف 🎯"
+    else:
+        hdr = "⚠️🛑 <b>تحذير اقتراب من الستوب! (NEAR STOP LOSS)</b> 🔴"
+        rem_str = f"باقي فقط <b>-{rem_sl:.2f}%</b> للوصول للستوب 🛡️"
+
+    return (
+        f"{hdr}\n"
+        f"📊 <b>{sym}</b> | {mkt} | {side_ar}\n"
+        f"{'─'*30}\n"
+        f"📍 <b>سعر الدخول:</b> <code>{entry:.6f}</code>\n"
+        f"🎯 <b>سعر الهدف:</b> <code>{tp:.6f}</code>\n"
+        f"🛡️ <b>سعر الستوب:</b> <code>{sl:.6f}</code>\n"
+        f"{'─'*30}\n"
+        f"⚡️ <b>المسافة المتبقية:</b> {rem_str}\n"
+        f"📊 المتبقي للهدف: <code>+{rem_tp:.2f}%</code> | المتبقي للستوب: <code>-{rem_sl:.2f}%</code>\n"
+        f"{'─'*30}\n"
+        f"⏰ {now}"
+    )
+
 
 def format_outcome_message(sig_data: dict) -> str:
     sym     = sig_data["symbol"]
@@ -478,14 +535,49 @@ async def run_scanner(bot: Bot):
     log.info(f"Scan done. Signals sent: {signals_sent}")
 
     # ── فحص ومتابعة الصفقات السابقة وإرسال إشعارات الهدف والستوب بشارت ─────
-    closed_signals = check_signal_outcomes()
+    closed_signals, near_alerts = check_signal_outcomes()
+
+    # 1. إشعارات قرب الهدف أو الستوب (0.30% أو أقل)
+    for n_data in near_alerts:
+        try:
+            near_msg = format_near_alert_message(n_data)
+            sym = n_data.get("symbol", "")
+            mkt = n_data.get("market", "FUTURES").lower()
+
+            near_chart_buf = None
+            try:
+                raw_data = fetch_klines(sym, "5m", 80, mkt)
+                if raw_data:
+                    near_chart_buf = generate_near_alert_chart(
+                        sym,
+                        raw_data["closes"], raw_data["highs"],
+                        raw_data["lows"],   raw_data["opens"],
+                        raw_data["volumes"],
+                        n_data,
+                        n_data.get("alert_type", "NEAR_TP"),
+                        n_data.get("rem_tp_pct", 0.0),
+                        n_data.get("rem_sl_pct", 0.0),
+                        lookback=60
+                    )
+            except Exception as chart_err:
+                log.warning(f"Near alert chart error {sym}: {chart_err}")
+
+            if near_chart_buf:
+                await bot.send_photo(chat_id=TEST_CHANNEL_ID, photo=near_chart_buf, caption=near_msg, parse_mode="HTML")
+            else:
+                await bot.send_message(chat_id=TEST_CHANNEL_ID, text=near_msg, parse_mode="HTML")
+
+            log.info(f"Near Alert Sent: {sym} -> {n_data.get('alert_type')} (rem_tp={n_data.get('rem_tp_pct')}%, rem_sl={n_data.get('rem_sl_pct')}%)")
+        except Exception as near_err:
+            log.error(f"Error sending near alert: {near_err}")
+
+    # 2. إشعارات الإغلاق التام (WIN / LOSS)
     for sig_data in closed_signals:
         try:
             outcome_msg = format_outcome_message(sig_data)
             sym = sig_data.get("symbol", "")
             mkt = sig_data.get("market", "FUTURES").lower()
 
-            # توليد شارت النتيجة الذي يوضح شمعة الدخول وشمعة الخروج
             outcome_chart_buf = None
             try:
                 raw_data = fetch_klines(sym, "5m", 80, mkt)
@@ -510,6 +602,7 @@ async def run_scanner(bot: Bot):
             log.error(f"Error sending outcome notification: {notify_err}")
 
     return signals_sent
+
 
 
 
