@@ -264,37 +264,124 @@ def format_pump_caption(alert: dict) -> str:
         f"⏰ {now}"
     )
 
-active_signals: dict = {}  # symbol → signal_data
+# ── تتبع وحفظ الإشارات في ملف دائِم (Persistent Signal Tracking) ────
+SIGNALS_FILE = "signals_history.json"
 
-def check_signal_outcomes():
-    """يتحقق من نتائج الإشارات النشطة"""
-    to_remove = []
-    for sym, sig_data in active_signals.items():
-        market = sig_data["market"].lower()
-        data = fetch_klines(sym, "4h", 10, market)
-        if data is None: continue
-        curr = data["closes"][-1]
-        high = max(data["highs"][-5:])
-        low  = min(data["lows"][-5:])
-        side = sig_data["side"]
-        sl   = sig_data["sl"]
-        tp   = sig_data["tp"]
-        entry= sig_data["entry"]
+def load_signals_history() -> dict:
+    if os.path.exists(SIGNALS_FILE):
+        try:
+            with open(SIGNALS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
 
-        result = None
+def save_signals_history(signals_dict: dict):
+    try:
+        with open(SIGNALS_FILE, "w", encoding="utf-8") as f:
+            json.dump(signals_dict, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log.error(f"Error saving signals history: {e}")
+
+active_signals: dict = load_signals_history()
+
+def check_signal_outcomes() -> list:
+    """
+    يتحقق من كافة الإشارات السابقة في الملف ويُرجع الإشارات التي حققت الهدف أو الستوب
+    """
+    global active_signals
+    closed_events = []
+
+    for key, sig_data in list(active_signals.items()):
+        # إذا كانت الإشارة مغلقة سابقاً، لا تفحصها
+        if sig_data.get("status") in ("WIN", "LOSS", "BE"):
+            continue
+
+        # فحص كواشف البمب والدمب المنفصلة
+        if key.startswith("PUMP_"):
+            continue
+
+        sym    = sig_data.get("symbol")
+        market = sig_data.get("market", "FUTURES").lower()
+        side   = sig_data.get("side", "LONG")
+        entry  = sig_data.get("entry", 0.0)
+        sl     = sig_data.get("sl", 0.0)
+        tp     = sig_data.get("tp", 0.0)
+
+        if not sym or not entry or not sl or not tp:
+            continue
+
+        data = fetch_klines(sym, "5m", 15, market)
+        if data is None:
+            continue
+
+        high_val = float(np.max(data["highs"]))
+        low_val  = float(np.min(data["lows"]))
+        curr_val = float(data["closes"][-1])
+
+        status = None
+        exit_price = curr_val
+
+        # فحص وصول السعر للهدف أو الستوب
         if side == "LONG":
-            if low <= sl:    result = "LOSS"
-            elif high >= tp: result = "WIN"
-        else:
-            if high >= sl:   result = "LOSS"
-            elif low <= tp:  result = "WIN"
+            if high_val >= tp:
+                status = "WIN"
+                exit_price = tp
+            elif low_val <= sl:
+                status = "LOSS"
+                exit_price = sl
+        else: # SHORT
+            if low_val <= tp:
+                status = "WIN"
+                exit_price = tp
+            elif high_val >= sl:
+                status = "LOSS"
+                exit_price = sl
 
-        if result:
-            sig_data["result"] = result
-            sig_data["exit_price"] = curr
-            to_remove.append(sym)
+        if status:
+            pnl_pct = ((exit_price - entry) / entry * 100) if side == "LONG" else ((entry - exit_price) / entry * 100)
+            sig_data["status"]     = status
+            sig_data["exit_price"] = exit_price
+            sig_data["pnl_pct"]    = round(pnl_pct, 2)
+            sig_data["closed_at"]  = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    return [(sym, active_signals.pop(sym)) for sym in to_remove]
+            closed_events.append(sig_data)
+
+    if closed_events:
+        save_signals_history(active_signals)
+
+    return closed_events
+
+def format_outcome_message(sig_data: dict) -> str:
+    sym     = sig_data["symbol"]
+    side    = sig_data["side"]
+    mkt     = sig_data.get("market", "FUTURES").upper()
+    status  = sig_data["status"]
+    entry   = sig_data["entry"]
+    exit_p  = sig_data["exit_price"]
+    pnl_pct = sig_data.get("pnl_pct", 0.0)
+    now     = sig_data.get("closed_at", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
+
+    if status == "WIN":
+        emo = "🎯🎯 <b>تحقق الهدف بالكامل! (TARGET HIT)</b> 🟢"
+        pnl_str = f"+{pnl_pct:.2f}%"
+    else:
+        emo = "🛡️🛑 <b>ضرب وقف الخسارة (STOP LOSS HIT)</b> 🔴"
+        pnl_str = f"{pnl_pct:.2f}%"
+
+    side_ar = "شراء (LONG)" if side == "LONG" else "بيع (SHORT)"
+
+    return (
+        f"{emo}\n"
+        f"📊 <b>{sym}</b> | {mkt} | {side_ar}\n"
+        f"{'─'*30}\n"
+        f"📍 <b>سعر الدخول:</b> <code>{entry:.6f}</code>\n"
+        f"🏁 <b>سعر الخروج:</b> <code>{exit_p:.6f}</code>\n"
+        f"📈 <b>الربح / الخسارة (PnL):</b> <b>{pnl_str}</b>\n"
+        f"{'─'*30}\n"
+        f"⏰ {now}"
+    )
+
 
 # ── الماسح الرئيسي ──────────────────────────────────────────
 async def run_scanner(bot: Bot):
@@ -365,6 +452,7 @@ async def run_scanner(bot: Bot):
                             await bot.send_message(chat_id=TEST_CHANNEL_ID, text=caption, parse_mode="HTML")
 
                         active_signals[key] = sig
+                        save_signals_history(active_signals)
                         signals_sent += 1
                         log.info(f"Signal sent: {symbol} {market} {sig['side']} score={sig['score']:.1f}")
 
@@ -378,6 +466,7 @@ async def run_scanner(bot: Bot):
                             pump_caption = format_pump_caption(pump_alert)
                             await bot.send_message(chat_id=TEST_CHANNEL_ID, text=pump_caption, parse_mode="HTML")
                             active_signals[pkey] = pump_alert
+                            save_signals_history(active_signals)
                             log.info(f"Pump/Dump Alert sent: {symbol} {market} {pump_alert['type']} ({pump_alert['change_pct']}%, {pump_alert['vol_ratio']}x vol)")
 
                 await asyncio.sleep(0.3)
@@ -387,25 +476,18 @@ async def run_scanner(bot: Bot):
 
     log.info(f"Scan done. Signals sent: {signals_sent}")
 
-    # تحقق من نتائج الإشارات السابقة
-    closed = check_signal_outcomes()
-    for sym, sig_data in closed:
-        result = sig_data.get("result","OPEN")
-        emoji  = "✅" if result=="WIN" else "❌"
-        entry  = sig_data["entry"]
-        exit_p = sig_data.get("exit_price",0)
-        pnl    = ((exit_p-entry)/entry*100) if sig_data["side"]=="LONG" else ((entry-exit_p)/entry*100)
-        msg = (
-            f"{emoji} <b>نتيجة {sym.split('_')[0]}</b>\n"
-            f"الدخول: <code>{entry:.6f}</code> ← الخروج: <code>{exit_p:.6f}</code>\n"
-            f"PnL: <b>{pnl:+.2f}%</b>\n"
-            f"النتيجة: <b>{result}</b>"
-        )
+    # ── فحص ومتابعة الصفقات السابقة وإرسال إشعارات الهدف والستوب ─────
+    closed_signals = check_signal_outcomes()
+    for sig_data in closed_signals:
         try:
-            await bot.send_message(chat_id=TEST_CHANNEL_ID, text=msg, parse_mode="HTML")
-        except: pass
+            outcome_msg = format_outcome_message(sig_data)
+            await bot.send_message(chat_id=TEST_CHANNEL_ID, text=outcome_msg, parse_mode="HTML")
+            log.info(f"Outcome Notification Sent: {sig_data['symbol']} -> {sig_data['status']} ({sig_data.get('pnl_pct')})")
+        except Exception as notify_err:
+            log.error(f"Error sending outcome notification: {notify_err}")
 
     return signals_sent
+
 
 # ── إرسال ملخص يومي ──────────────────────────────────────────
 async def send_summary(bot: Bot, scan_count: int, total_sigs: int):
