@@ -143,6 +143,13 @@ def analyze_mtf_futures(
     if not micro_signal or sl_level is None:
         return None
 
+    # ── فحص تماشي الصفقة مع اتجاه البيتكوين الحاد (BTC Correlation Shield) ─
+    from market_regime_shield import check_btc_correlation_guard
+    btc_pass, btc_reason = check_btc_correlation_guard(symbol, micro_signal)
+    if not btc_pass:
+        return None
+    sources.append("BTC_SHIELD_CONFIRMED")
+
     # ── 3. حساب الأهداف ومخاطرة الفيوتشر الـ Tight (R:R = 1:2.5) ──
     rr = 2.5 # نسبة مخاطرة إلى عائد ممتازة للفيوتشر
     

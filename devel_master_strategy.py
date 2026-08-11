@@ -808,16 +808,27 @@ def build_signal(
     ss  = agg["short_score"]
     gap = 0.8  # يجب أن يتقدم الاتجاه الفائز بهذا الهامش
 
-    # فلتر الاتجاه العام (EMA 200 Trend Alignment):
-    # نطلب أن يكون LONG متماشياً مع EMA200 أو بوجود Wyckoff Accumulation/OB قوي
+    # ── فلتر بيئة السوق وتوافق حركة البيتكوين (BTC Correlation Shield) ──────
+    from market_regime_shield import check_btc_correlation_guard
+
     if ls >= MIN_ENTRY_SCORE and ls > ss + gap:
         if above_e200 or ob_side == "LONG" or wyc_acc > 0:
-            side = "LONG"; raw = ls; src = agg["long_src"]
+            btc_pass, btc_reason = check_btc_correlation_guard(symbol, "LONG")
+            if btc_pass:
+                side = "LONG"; raw = ls; src = agg["long_src"]
+                src.append("BTC_SHIELD_CONFIRMED")
+            else:
+                return None
         else:
             return None
     elif ss >= MIN_ENTRY_SCORE and ss > ls + gap:
         if below_e200 or ob_side == "SHORT" or wyc_dist > 0:
-            side = "SHORT"; raw = ss; src = agg["short_src"]
+            btc_pass, btc_reason = check_btc_correlation_guard(symbol, "SHORT")
+            if btc_pass:
+                side = "SHORT"; raw = ss; src = agg["short_src"]
+                src.append("BTC_SHIELD_CONFIRMED")
+            else:
+                return None
         else:
             return None
     else:
