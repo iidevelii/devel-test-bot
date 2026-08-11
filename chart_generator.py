@@ -204,17 +204,17 @@ def generate_chart(
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.4f"))
 
     # ── العنوان ─────────────────────────────────────────────
-    side_emoji = "🟢 LONG" if side == "LONG" else "🔴 SHORT"
+    side_label = "LONG" if side == "LONG" else "SHORT"
     sl_pct  = abs(entry-sl)/entry*100
     tp_pct  = abs(tp-entry)/entry*100
     src_display = " | ".join(sources[:4]) if sources else "DEVEL_MASTER"
 
     ax.set_title(
-        f"DEVEL_MASTER  ●  {symbol}  ●  {market}  ●  4H\n"
-        f"{side_emoji}   Entry: {entry:.4f}   SL: -{sl_pct:.1f}%   TP: +{tp_pct:.1f}%   R:R 1:{rr}\n"
+        f"DEVEL_MASTER  |  {symbol}  |  {market}  |  4H\n"
+        f"[{side_label}]   Entry: {entry:.4f}   SL: -{sl_pct:.1f}%   TP: +{tp_pct:.1f}%   R:R 1:{rr}\n"
         f"Score: {score:.1f}/10  |  {src_display}",
         color=TEXT_COLOR, fontsize=9, pad=10,
-        fontfamily="monospace",
+        fontfamily="sans-serif",
         loc="left"
     )
 
@@ -331,7 +331,7 @@ def _draw_order_blocks(ax, O, H, L, C, X):
             if up:
                 rect = plt.Rectangle(
                     (i-0.4, L[i]), 0.8, H[i]-L[i],
-                    color=UP_COLOR, alpha=0.12, linewidth=0.8,
+                    facecolor=UP_COLOR, alpha=0.12, linewidth=0.8,
                     edgecolor=UP_COLOR
                 )
                 ax.add_patch(rect)
@@ -342,7 +342,7 @@ def _draw_order_blocks(ax, O, H, L, C, X):
             if dn:
                 rect = plt.Rectangle(
                     (i-0.4, L[i]), 0.8, H[i]-L[i],
-                    color=DOWN_COLOR, alpha=0.12, linewidth=0.8,
+                    facecolor=DOWN_COLOR, alpha=0.12, linewidth=0.8,
                     edgecolor=DOWN_COLOR
                 )
                 ax.add_patch(rect)
