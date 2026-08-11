@@ -14,6 +14,7 @@ import os, time, json, asyncio, logging, requests, numpy as np
 from datetime import datetime, timezone
 from telegram import Bot, InputMediaPhoto
 from chart_generator import generate_chart
+from mtf_futures_engine import analyze_mtf_futures
 
 # ── إعدادات من .env ──────────────────────────────────────────
 TELEGRAM_TOKEN    = os.getenv("TEST_BOT_TOKEN", "")       # توكن بوت الاختبار
@@ -308,7 +309,37 @@ async def run_scanner(bot: Bot):
     for symbol in SYMBOLS:
         for market in markets:
             try:
-                # 1. فحص إشارات DEVEL_MASTER
+                # 1. فحص إشارات الفيوتشر الاحترافية بـ Multi-Timeframe (MTF Precision Futures)
+                raw_1h = fetch_klines(symbol, "1h", 100, market)
+                raw_5m = fetch_klines(symbol, "5m", 100, market)
+                if raw_1h and raw_5m:
+                    mtf_sig = analyze_mtf_futures(symbol, raw_1h, raw_5m)
+                    if mtf_sig:
+                        mkey = f"MTF_{symbol}_{market}_{mtf_sig['side']}"
+                        if mkey not in active_signals:
+                            chart_buf = None
+                            try:
+                                chart_buf = generate_chart(
+                                    symbol,
+                                    raw_5m["closes"], raw_5m["highs"],
+                                    raw_5m["lows"],   raw_5m["opens"],
+                                    raw_5m["volumes"],
+                                    mtf_sig, lookback=80
+                                )
+                            except Exception as chart_err:
+                                log.warning(f"Chart error MTF {symbol}: {chart_err}")
+
+                            caption = format_caption(mtf_sig)
+                            if chart_buf:
+                                await bot.send_photo(chat_id=TEST_CHANNEL_ID, photo=chart_buf, caption=caption, parse_mode="HTML")
+                            else:
+                                await bot.send_message(chat_id=TEST_CHANNEL_ID, text=caption, parse_mode="HTML")
+
+                            active_signals[mkey] = mtf_sig
+                            signals_sent += 1
+                            log.info(f"MTF Futures Signal sent: {symbol} {market} {mtf_sig['side']} RR={mtf_sig['rr']}")
+
+                # 2. فحص إشارات DEVEL_MASTER (فريم 4H)
                 sig = analyze(symbol, market, tf)
                 if sig is not None:
                     key = f"{symbol}_{market}"
