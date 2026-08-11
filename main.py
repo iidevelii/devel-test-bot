@@ -198,7 +198,71 @@ def format_caption(sig: dict) -> str:
         f"<i>⚠️ إشارة اختبار — ليست توصية استثمارية</i>"
     )
 
-# ── تتبع الإشارات (في الذاكرة) ──────────────────────────────
+# ── كاشف الانفجارات السعرية والفوليوم (Pump & Dump Alert) ───────
+def detect_pump_dump(symbol: str, data: dict, market: str) -> Optional[dict]:
+    closes  = data["closes"]
+    highs   = data["highs"]
+    lows    = data["lows"]
+    volumes = data["volumes"]
+    if len(closes) < 30: return None
+
+    curr_c = closes[-1]
+    prev_c = closes[-2]
+    curr_v = volumes[-1]
+    avg_v  = float(np.mean(volumes[-21:-1])) if len(volumes) >= 21 else float(np.mean(volumes[:-1]))
+
+    v_ratio = curr_v / avg_v if avg_v > 0 else 1.0
+    price_change_pct = (curr_c - prev_c) / prev_c * 100
+
+    # انفجار صاعد (PUMP): ارتفاع > 2.0% مع حجم تداول >= 2.5x
+    if price_change_pct >= 2.0 and v_ratio >= 2.5:
+        return {
+            "type": "PUMP",
+            "symbol": symbol,
+            "market": market,
+            "price": curr_c,
+            "change_pct": round(price_change_pct, 2),
+            "vol_ratio": round(v_ratio, 1),
+            "volume": curr_v,
+        }
+
+    # هبوط حاد (DUMP): هبوط <= -2.0% مع حجم تداول >= 2.5x
+    if price_change_pct <= -2.0 and v_ratio >= 2.5:
+        return {
+            "type": "DUMP",
+            "symbol": symbol,
+            "market": market,
+            "price": curr_c,
+            "change_pct": round(price_change_pct, 2),
+            "vol_ratio": round(v_ratio, 1),
+            "volume": curr_v,
+        }
+
+    return None
+
+def format_pump_caption(alert: dict) -> str:
+    typ   = alert["type"]
+    sym   = alert["symbol"]
+    mkt   = alert["market"].upper()
+    price = alert["price"]
+    chg   = alert["change_pct"]
+    v_rat = alert["vol_ratio"]
+    emo   = "🚨🚀 <b>انفجار صاعد (PUMP ALERT)</b>" if typ == "PUMP" else "⚠️📉 <b>هبوط حاد (DUMP ALERT)</b>"
+    chg_str = f"+{chg}%" if chg > 0 else f"{chg}%"
+    now   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    return (
+        f"{emo}\n"
+        f"📊 <b>{sym}</b> | {mkt} | 4H/15M\n"
+        f"{'─'*30}\n"
+        f"💰 <b>السعر الحالي:</b> <code>{price:.6f}</code>\n"
+        f"📈 <b>تغير السعر:</b> <code>{chg_str}</code>\n"
+        f"⚡️ <b>تضاعف الفوليوم:</b> <code>{v_rat}x</code> فوق المتوسط\n"
+        f"{'─'*30}\n"
+        f"🔍 <b>التحليل:</b> رصد دخول سيولة ضخمة وزخم حاد في السوق\n"
+        f"⏰ {now}"
+    )
+
 active_signals: dict = {}  # symbol → signal_data
 
 def check_signal_outcomes():
@@ -244,47 +308,48 @@ async def run_scanner(bot: Bot):
     for symbol in SYMBOLS:
         for market in markets:
             try:
+                # 1. فحص إشارات DEVEL_MASTER
                 sig = analyze(symbol, market, tf)
-                if sig is None: continue
+                if sig is not None:
+                    key = f"{symbol}_{market}"
+                    if key not in active_signals:
+                        chart_buf = None
+                        try:
+                            raw_data = fetch_klines(symbol, "4h", 100, market)
+                            if raw_data:
+                                chart_buf = generate_chart(
+                                    symbol,
+                                    raw_data["closes"], raw_data["highs"],
+                                    raw_data["lows"],   raw_data["opens"],
+                                    raw_data["volumes"],
+                                    sig
+                                )
+                        except Exception as chart_err:
+                            log.warning(f"Chart error {symbol}: {chart_err}")
 
-                # لا ترسل إذا كانت إشارة نشطة لنفس الرمز
-                key = f"{symbol}_{market}"
-                if key in active_signals: continue
+                        caption = format_caption(sig)
+                        if chart_buf:
+                            await bot.send_photo(chat_id=TEST_CHANNEL_ID, photo=chart_buf, caption=caption, parse_mode="HTML")
+                        else:
+                            await bot.send_message(chat_id=TEST_CHANNEL_ID, text=caption, parse_mode="HTML")
 
-                # توليد الشارت
-                chart_buf = None
-                try:
-                    raw_data = fetch_klines(symbol, "4h", 100, market)
-                    if raw_data:
-                        chart_buf = generate_chart(
-                            symbol,
-                            raw_data["closes"], raw_data["highs"],
-                            raw_data["lows"],   raw_data["opens"],
-                            raw_data["volumes"],
-                            sig
-                        )
-                except Exception as chart_err:
-                    log.warning(f"Chart error {symbol}: {chart_err}")
+                        active_signals[key] = sig
+                        signals_sent += 1
+                        log.info(f"Signal sent: {symbol} {market} {sig['side']} score={sig['score']:.1f}")
 
-                caption = format_caption(sig)
+                # 2. فحص إشارات الانفجار والزخم المفاجئ (Pump & Dump)
+                raw_data = fetch_klines(symbol, "15m", 40, market)
+                if raw_data:
+                    pump_alert = detect_pump_dump(symbol, raw_data, market)
+                    if pump_alert:
+                        pkey = f"PUMP_{symbol}_{market}_{pump_alert['type']}"
+                        if pkey not in active_signals:
+                            pump_caption = format_pump_caption(pump_alert)
+                            await bot.send_message(chat_id=TEST_CHANNEL_ID, text=pump_caption, parse_mode="HTML")
+                            active_signals[pkey] = pump_alert
+                            log.info(f"Pump/Dump Alert sent: {symbol} {market} {pump_alert['type']} ({pump_alert['change_pct']}%, {pump_alert['vol_ratio']}x vol)")
 
-                if chart_buf:
-                    await bot.send_photo(
-                        chat_id=TEST_CHANNEL_ID,
-                        photo=chart_buf,
-                        caption=caption,
-                        parse_mode="HTML"
-                    )
-                else:
-                    await bot.send_message(
-                        chat_id=TEST_CHANNEL_ID,
-                        text=caption,
-                        parse_mode="HTML"
-                    )
-                active_signals[key] = sig
-                signals_sent += 1
-                log.info(f"Signal sent: {symbol} {market} {sig['side']} score={sig['score']:.1f}")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
             except Exception as e:
                 log.error(f"Error {symbol}/{market}: {e}")
             await asyncio.sleep(0.2)

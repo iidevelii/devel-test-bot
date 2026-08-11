@@ -719,7 +719,17 @@ def build_signal(
 
     curr_atr = float(atr_arr[-1]) if atr_arr[-1] > 0 else float(c[-1]) * 0.008
 
-    # موقع السعر
+    # ── EMA 200 Trend Alignment ─────────────────────────────
+    e200 = _ema(c, 200)
+    curr_e200 = float(e200[-1]) if not math.isnan(e200[-1]) else float(c[-1])
+    above_e200 = float(c[-1]) > curr_e200
+    below_e200 = float(c[-1]) < curr_e200
+
+    # ── Volume Check ────────────────────────────────────────
+    v_ratio = v[-1] / avg_vol if avg_vol > 0 else 1.0
+    vol_strong = v_ratio >= 1.25
+
+    # ── موقع السعر ──────────────────────────────────────────
     rh = float(np.max(h[-15:])); rl = float(np.min(l[-15:]))
     pos = (float(c[-1]) - rl) / (rh - rl) if rh != rl else 0.5
     near_sup = pos <= 0.30; near_res = pos >= 0.70
@@ -730,22 +740,20 @@ def build_signal(
     cl, cs   = 0.0, 0.0
     cdetail  = ""
 
-    # اختراق ترند هابط طويل
-    if dn_len >= 15 and float(c[-1]) > float(c[-2]):
-        vol_ok = avg_vol > 0 and v[-1] >= avg_vol * 1.3
-        cl += (2.0 if dn_len >= 25 else 1.5) * (1.2 if vol_ok else 1.0)
+    # اختراق ترند هابط طويل (فقط إذا كسر السعر قمة الشمعة السابقة بزخم)
+    if dn_len >= 10 and float(c[-1]) > float(h[-2]) and vol_strong:
+        cl += (2.0 if dn_len >= 20 else 1.5)
         cdetail = f"DOWNTREND_BRK({dn_len}c)"
 
     # اختراق ترند صاعد طويل (بيع)
-    if up_len >= 15 and float(c[-1]) < float(c[-2]):
-        vol_ok = avg_vol > 0 and v[-1] >= avg_vol * 1.3
-        cs += (2.0 if up_len >= 25 else 1.5) * (1.2 if vol_ok else 1.0)
+    if up_len >= 10 and float(c[-1]) < float(l[-2]) and vol_strong:
+        cs += (2.0 if up_len >= 20 else 1.5)
         cdetail = f"UPTREND_BRK({up_len}c)"
 
-    # Fibonacci
+    # Fibonacci (النسبة الذهبية 0.618 فقط)
     fib_s, fib_side = _fibonacci_score(h, l, c, v, avg_vol)
-    if fib_side == "LONG":  cl += fib_s
-    if fib_side == "SHORT": cs += fib_s
+    if fib_side == "LONG" and vol_strong:  cl += fib_s
+    if fib_side == "SHORT" and vol_strong: cs += fib_s
 
     # S/R Breakout + Retest
     sr_s, sr_side = _sr_breakout_retest_score(h, l, c, v, avg_vol)
@@ -771,8 +779,15 @@ def build_signal(
     wyc_acc  = _wyckoff_accumulation_score(h, l, c, v)
     wyc_dist = _wyckoff_distribution_score(h, l, c, v)
 
-    # ── Candles ─────────────────────────────────────────────
+    # ── Candles (تقييد الشموع المنفردة: تقبل فقط إذا كان هناك تأكيد من مدرسة أخرى) ──
     cdl_s, cdl_side = _candle_score(o, h, l, c, v, near_sup, near_res)
+    has_structure_long  = (cl > 0 or ob_side == "LONG" or wyc_acc > 0 or sr_side == "LONG")
+    has_structure_short = (cs > 0 or ob_side == "SHORT" or wyc_dist > 0 or sr_side == "SHORT")
+
+    if cdl_side == "LONG" and not has_structure_long:
+        cdl_s = cdl_s * 0.4  # تخفيض وزن الشمعة إذا كانت منفردة
+    if cdl_side == "SHORT" and not has_structure_short:
+        cdl_s = cdl_s * 0.4
 
     # ── Momentum ────────────────────────────────────────────
     mom_s, mom_side = _momentum_score(rsi_arr, mh, atr_arr, v, adx_v, pdi, mdi)
@@ -793,10 +808,18 @@ def build_signal(
     ss  = agg["short_score"]
     gap = 0.8  # يجب أن يتقدم الاتجاه الفائز بهذا الهامش
 
+    # فلتر الاتجاه العام (EMA 200 Trend Alignment):
+    # نطلب أن يكون LONG متماشياً مع EMA200 أو بوجود Wyckoff Accumulation/OB قوي
     if ls >= MIN_ENTRY_SCORE and ls > ss + gap:
-        side = "LONG"; raw = ls; src = agg["long_src"]
+        if above_e200 or ob_side == "LONG" or wyc_acc > 0:
+            side = "LONG"; raw = ls; src = agg["long_src"]
+        else:
+            return None
     elif ss >= MIN_ENTRY_SCORE and ss > ls + gap:
-        side = "SHORT"; raw = ss; src = agg["short_src"]
+        if below_e200 or ob_side == "SHORT" or wyc_dist > 0:
+            side = "SHORT"; raw = ss; src = agg["short_src"]
+        else:
+            return None
     else:
         return None
 
