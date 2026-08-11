@@ -119,15 +119,15 @@ def analyze_dip_sweep(
         return None
 
     # ── 3. إعداد الستوب لوس والهدف الواسع والآمن (Safe SL = 2.0x ATR) ──
-    rr = 1.3 if market.upper() == "SPOT" else 1.5
+    rr = 1.8 if market.upper() == "SPOT" else 2.0
     
     if side == "LONG":
-        sl = min(curr_l - curr_atr * 0.5, curr_c - curr_atr * 1.8)
+        sl = min(curr_l - curr_atr * 0.4, curr_c - curr_atr * 1.6)
         risk = curr_c - sl
         if risk <= 0: return None
         tp = curr_c + risk * rr
     else: # SHORT
-        sl = max(curr_h + curr_atr * 0.5, curr_c + curr_atr * 1.8)
+        sl = max(curr_h + curr_atr * 0.4, curr_c + curr_atr * 1.6)
         risk = sl - curr_c
         if risk <= 0: return None
         tp = curr_c - risk * rr
@@ -135,8 +135,8 @@ def analyze_dip_sweep(
     sl_pct = abs(curr_c - sl) / curr_c * 100
     tp_pct = abs(tp - curr_c) / curr_c * 100
 
-    # الرفض إذا كان الستوب ضيق جداً (أقل من 1.2%) أو واسع جداً (أكثر من 6%)
-    if sl_pct < 1.2 or sl_pct > 6.0:
+    # الرفض إذا كان الستوب ضيق جداً (أقل من 1.0%) أو واسع جداً (أكثر من 6%)
+    if sl_pct < 1.0 or sl_pct > 6.0:
         return None
 
     return {
