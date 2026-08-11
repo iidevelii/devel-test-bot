@@ -25,7 +25,7 @@ from typing import Optional
 
 # ── إعدادات ──────────────────────────────────────────────────
 RR_FUTURES        = float(os.getenv("DM_RR_FUTURES",   "1.5"))
-RR_SPOT           = float(os.getenv("DM_RR_SPOT",      "1.3"))
+RR_SPOT           = float(os.getenv("DM_RR_SPOT",      "2.0"))
 MIN_ENTRY_SCORE   = float(os.getenv("DM_MIN_SCORE",    "5.5"))
 SL_ATR_BUFFER     = float(os.getenv("DM_SL_ATR_BUF",  "0.4"))  # ATR buffer فوق/تحت منطقة SL
 MIN_SCORE         = int(os.getenv("DM_AI_MIN_SCORE", "60"))       # للتوافق مع trading_bot
