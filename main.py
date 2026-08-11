@@ -13,8 +13,9 @@ devel_test_bot — بوت اختبار استراتيجية DEVEL_MASTER
 import os, time, json, asyncio, logging, requests, numpy as np
 from datetime import datetime, timezone
 from telegram import Bot, InputMediaPhoto
-from chart_generator import generate_chart
+from chart_generator import generate_chart, generate_outcome_chart
 from mtf_futures_engine import analyze_mtf_futures
+
 
 # ── إعدادات من .env ──────────────────────────────────────────
 TELEGRAM_TOKEN    = os.getenv("TEST_BOT_TOKEN", "")       # توكن بوت الاختبار
@@ -476,17 +477,40 @@ async def run_scanner(bot: Bot):
 
     log.info(f"Scan done. Signals sent: {signals_sent}")
 
-    # ── فحص ومتابعة الصفقات السابقة وإرسال إشعارات الهدف والستوب ─────
+    # ── فحص ومتابعة الصفقات السابقة وإرسال إشعارات الهدف والستوب بشارت ─────
     closed_signals = check_signal_outcomes()
     for sig_data in closed_signals:
         try:
             outcome_msg = format_outcome_message(sig_data)
-            await bot.send_message(chat_id=TEST_CHANNEL_ID, text=outcome_msg, parse_mode="HTML")
-            log.info(f"Outcome Notification Sent: {sig_data['symbol']} -> {sig_data['status']} ({sig_data.get('pnl_pct')})")
+            sym = sig_data.get("symbol", "")
+            mkt = sig_data.get("market", "FUTURES").lower()
+
+            # توليد شارت النتيجة الذي يوضح شمعة الدخول وشمعة الخروج
+            outcome_chart_buf = None
+            try:
+                raw_data = fetch_klines(sym, "5m", 80, mkt)
+                if raw_data:
+                    outcome_chart_buf = generate_outcome_chart(
+                        sym,
+                        raw_data["closes"], raw_data["highs"],
+                        raw_data["lows"],   raw_data["opens"],
+                        raw_data["volumes"],
+                        sig_data, lookback=60
+                    )
+            except Exception as chart_err:
+                log.warning(f"Outcome chart error {sym}: {chart_err}")
+
+            if outcome_chart_buf:
+                await bot.send_photo(chat_id=TEST_CHANNEL_ID, photo=outcome_chart_buf, caption=outcome_msg, parse_mode="HTML")
+            else:
+                await bot.send_message(chat_id=TEST_CHANNEL_ID, text=outcome_msg, parse_mode="HTML")
+
+            log.info(f"Outcome Notification Sent: {sym} -> {sig_data.get('status')} ({sig_data.get('pnl_pct')}%)")
         except Exception as notify_err:
             log.error(f"Error sending outcome notification: {notify_err}")
 
     return signals_sent
+
 
 
 # ── إرسال ملخص يومي ──────────────────────────────────────────

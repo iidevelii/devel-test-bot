@@ -403,3 +403,121 @@ def _draw_bos(ax, H, L, C, X, side):
                    linestyle="-.", alpha=0.8)
         ax.text(sl_[-1], lsl, "  BOS", color="#ce93d8",
                 fontsize=7, va="top", fontweight="bold")
+
+
+# ══════════════════════════════════════════════════════════════
+# شارت نتيجة الصفقة (Outcome Chart مع تحديد شمعة الدخول والخروج)
+# ══════════════════════════════════════════════════════════════
+
+def generate_outcome_chart(
+    symbol: str,
+    closes: list, highs: list, lows: list, opens: list, volumes: list,
+    sig_data: dict,
+    lookback: int = 60
+) -> io.BytesIO:
+    """
+    يرسم شارت يوضح مسار الصفقة من شمعة الدخول إلى شمعة الخروج (TP أو SL)
+    مع رسم سهم الدخول وسهم الخروج ومسار الصفقة.
+    """
+    n = min(lookback, len(closes))
+    C = np.array(closes[-n:], dtype=float)
+    H = np.array(highs[-n:], dtype=float)
+    L = np.array(lows[-n:], dtype=float)
+    O = np.array(opens[-n:], dtype=float)
+    V = np.array(volumes[-n:], dtype=float)
+    X = np.arange(len(C))
+
+    entry   = sig_data["entry"]
+    sl      = sig_data["sl"]
+    tp      = sig_data["tp"]
+    exit_p  = sig_data.get("exit_price", C[-1])
+    side    = sig_data["side"]
+    status  = sig_data.get("status", "WIN")
+    pnl_pct = sig_data.get("pnl_pct", 0.0)
+    market  = sig_data.get("market", "FUTURES")
+
+    # ── إعداد الشكل ─────────────────────────────────────────
+    fig, (ax, ax_vol) = plt.subplots(
+        2, 1, figsize=(14, 8),
+        gridspec_kw={"height_ratios": [4, 1]},
+        facecolor=BG_COLOR
+    )
+    for a in (ax, ax_vol):
+        a.set_facecolor(BG_COLOR)
+        a.tick_params(colors=TEXT_COLOR, labelsize=8)
+        a.spines[["top","right","left","bottom"]].set_color(GRID_COLOR)
+        a.grid(color=GRID_COLOR, linewidth=0.5, alpha=0.7)
+        a.yaxis.tick_right()
+
+    # ── رسم الشموع ──────────────────────────────────────────
+    for i in X:
+        color = UP_COLOR if C[i] >= O[i] else DOWN_COLOR
+        ax.plot([i, i], [L[i], H[i]], color=color, linewidth=0.8, alpha=0.9)
+        body_h = abs(C[i] - O[i])
+        body_y = min(C[i], O[i])
+        rect = plt.Rectangle(
+            (i - 0.35, body_y), 0.7, max(body_h, (H[i]-L[i])*0.01),
+            facecolor=color, alpha=0.9, edgecolor=color
+        )
+        ax.add_patch(rect)
+
+    # ── حجم التداول ─────────────────────────────────────────
+    for i in X:
+        color = UP_COLOR if C[i] >= O[i] else DOWN_COLOR
+        ax_vol.bar(i, V[i], color=color, alpha=0.5, width=0.7)
+    ax_vol.set_xlim(-1, len(X))
+
+    # ── خطوط Entry / SL / TP ────────────────────────────────
+    ax.axhline(entry, color=ENTRY_COLOR, linewidth=1.5, linestyle="--", alpha=0.85)
+    ax.axhline(sl,    color=SL_COLOR,    linewidth=1.2, linestyle=":",  alpha=0.85)
+    ax.axhline(tp,    color=TP_COLOR,    linewidth=1.2, linestyle=":",  alpha=0.85)
+
+    # ── تمييز شمعة الدخول وشمعة الخروج ─────────────────────
+    entry_idx = max(0, len(X) - 15) # شمعة الدخول التقريبية
+    exit_idx  = len(X) - 1           # شمعة الخروج الأحدث
+
+    # علامة شمعة الدخول
+    ax.scatter([entry_idx], [entry], color=ENTRY_COLOR, s=120, zorder=6, marker="o")
+    ax.text(entry_idx, entry * (1.003 if side=="LONG" else 0.997), " ENTRY",
+            color=ENTRY_COLOR, fontsize=8.5, fontweight="bold", ha="center")
+
+    # علامة شمعة الخروج
+    exit_color = TP_COLOR if status == "WIN" else SL_COLOR
+    exit_marker = "^" if status == "WIN" else "v"
+    exit_label = "🎯 TARGET HIT" if status == "WIN" else "🛑 SL HIT"
+
+    ax.scatter([exit_idx], [exit_p], color=exit_color, s=150, zorder=7, marker=exit_marker)
+    ax.text(exit_idx, exit_p * (1.004 if side=="LONG" else 0.996), f" {exit_label}",
+            color=exit_color, fontsize=9, fontweight="bold", ha="right")
+
+    # رسم المسار بين الدخول والخروج
+    path_color = TP_COLOR if status == "WIN" else SL_COLOR
+    ax.plot([entry_idx, exit_idx], [entry, exit_p],
+            color=path_color, linewidth=2.5, linestyle="-", alpha=0.85)
+
+    # ── حدود المحاور والعنوان ─────────────────────────────────
+    price_range = max(H) - min(L)
+    ax.set_ylim(min(L) - price_range*0.05, max(H) + price_range*0.15)
+    ax.set_xlim(-1, len(X) + 3)
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.4f"))
+
+    status_txt = f"TARGET HIT (+{pnl_pct:.2f}%)" if status == "WIN" else f"STOP LOSS HIT ({pnl_pct:.2f}%)"
+    status_clr = TP_COLOR if status == "WIN" else SL_COLOR
+
+    ax.set_title(
+        f"DEVEL_MASTER OUTCOME  |  {symbol}  |  {market}  |  {side}\n"
+        f"RESULT: {status_txt}   Entry: {entry:.4f} -> Exit: {exit_p:.4f}",
+        color=status_clr, fontsize=10, pad=10,
+        fontweight="bold", fontfamily="sans-serif",
+        loc="left"
+    )
+
+    plt.tight_layout(rect=[0, 0, 0.88, 1])
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=130, bbox_inches="tight",
+                facecolor=BG_COLOR, edgecolor="none")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
