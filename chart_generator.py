@@ -203,6 +203,8 @@ def generate_chart(
     ax.set_xlim(-1, len(X) + 5)
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.4f"))
 
+    tf_display = str(signal.get("tf", "4H")).upper()
+
     # ── العنوان ─────────────────────────────────────────────
     side_label = "LONG" if side == "LONG" else "SHORT"
     sl_pct  = abs(entry-sl)/entry*100
@@ -210,7 +212,7 @@ def generate_chart(
     src_display = " | ".join(sources[:4]) if sources else "DEVEL_MASTER"
 
     ax.set_title(
-        f"DEVEL_MASTER  |  {symbol}  |  {market}  |  4H\n"
+        f"DEVEL_MASTER  |  {symbol}  |  {market}  |  {tf_display}\n"
         f"[{side_label}]   Entry: {entry:.4f}   SL: -{sl_pct:.1f}%   TP: +{tp_pct:.1f}%   R:R 1:{rr}\n"
         f"Score: {score:.1f}/10  |  {src_display}",
         color=TEXT_COLOR, fontsize=9, pad=10,
