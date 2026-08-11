@@ -15,6 +15,10 @@ from datetime import datetime, timezone
 from telegram import Bot, InputMediaPhoto
 from chart_generator import generate_chart, generate_outcome_chart, generate_near_alert_chart
 from mtf_futures_engine import analyze_mtf_futures
+from elite_spot_strategy import analyze_elite_spot
+from smc_vwap_institutional_engine import analyze_smc_vwap_institutional
+
+
 
 
 
@@ -526,6 +530,77 @@ async def run_scanner(bot: Bot):
                             active_signals[pkey] = pump_alert
                             save_signals_history(active_signals)
                             log.info(f"Pump/Dump Alert sent: {symbol} {market} {pump_alert['type']} ({pump_alert['change_pct']}%, {pump_alert['vol_ratio']}x vol)")
+
+                # 3. فحص استراتيجية النخبة للتداول الفوري (ELITE SPOT BREAKOUT - 1D/4H High Volume)
+                if market == "spot":
+                    raw_spot_4h = fetch_klines(symbol, "4h", 120, "spot")
+                    if raw_spot_4h:
+                        elite_sig = analyze_elite_spot(
+                            symbol,
+                            raw_spot_4h["closes"], raw_spot_4h["highs"],
+                            raw_spot_4h["lows"],   raw_spot_4h["opens"],
+                            raw_spot_4h["volumes"]
+                        )
+                        if elite_sig:
+                            es_key = f"ELITE_SPOT_{symbol}_LONG"
+                            if es_key not in active_signals:
+                                chart_buf = None
+                                try:
+                                    chart_buf = generate_chart(
+                                        symbol,
+                                        raw_spot_4h["closes"], raw_spot_4h["highs"],
+                                        raw_spot_4h["lows"],   raw_spot_4h["opens"],
+                                        raw_spot_4h["volumes"],
+                                        elite_sig, lookback=80
+                                    )
+                                except Exception as chart_err:
+                                    log.warning(f"Chart error Elite Spot {symbol}: {chart_err}")
+
+                                caption = format_caption(elite_sig)
+                                if chart_buf:
+                                    await bot.send_photo(chat_id=TEST_CHANNEL_ID, photo=chart_buf, caption=caption, parse_mode="HTML")
+                                else:
+                                    await bot.send_message(chat_id=TEST_CHANNEL_ID, text=caption, parse_mode="HTML")
+
+                                active_signals[es_key] = elite_sig
+                                save_signals_history(active_signals)
+                                signals_sent += 1
+                                log.info(f"ELITE Spot Signal sent: {symbol} LONG score={elite_sig['score']}")
+
+                # 4. فحص استراتيجية السيولة والمؤسسات (SMC-VWAP Institutional Engine)
+                raw_4h = fetch_klines(symbol, "4h", 120, market)
+                if raw_4h:
+                    smc_sig = analyze_smc_vwap_institutional(
+                        symbol,
+                        raw_4h["closes"], raw_4h["highs"],
+                        raw_4h["lows"],   raw_4h["opens"],
+                        raw_4h["volumes"], market
+                    )
+                    if smc_sig:
+                        smc_key = f"SMC_VWAP_{symbol}_{market}_{smc_sig['side']}"
+                        if smc_key not in active_signals:
+                            chart_buf = None
+                            try:
+                                chart_buf = generate_chart(
+                                    symbol,
+                                    raw_4h["closes"], raw_4h["highs"],
+                                    raw_4h["lows"],   raw_4h["opens"],
+                                    raw_4h["volumes"],
+                                    smc_sig, lookback=80
+                                )
+                            except Exception as chart_err:
+                                log.warning(f"Chart error SMC VWAP {symbol}: {chart_err}")
+
+                            caption = format_caption(smc_sig)
+                            if chart_buf:
+                                await bot.send_photo(chat_id=TEST_CHANNEL_ID, photo=chart_buf, caption=caption, parse_mode="HTML")
+                            else:
+                                await bot.send_message(chat_id=TEST_CHANNEL_ID, text=caption, parse_mode="HTML")
+
+                            active_signals[smc_key] = smc_sig
+                            save_signals_history(active_signals)
+                            signals_sent += 1
+                            log.info(f"SMC-VWAP Institutional Signal sent: {symbol} {market} {smc_sig['side']} AI_Score={smc_sig['ai_score']}")
 
                 await asyncio.sleep(0.3)
             except Exception as e:
