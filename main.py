@@ -152,21 +152,20 @@ def format_signal(sig: dict) -> str:
     adx   = sig.get("adx", 0)
     sl_pct= abs(entry-sl)/entry*100
     tp_pct= abs(tp-entry)/entry*100
-
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     return (
-        f"{EMOJI[side]} **DEVEL_MASTER — {side}**\n"
+        f"{EMOJI[side]} <b>DEVEL MASTER — {side}</b>\n"
         f"{MKT_EMOJI[mkt]} {sig['symbol']} | {mkt.upper()}\n\n"
-        f"📍 **الدخول:** `{entry:.4f}`\n"
-        f"🛡️ **SL:** `{sl:.4f}` (-{sl_pct:.1f}%)\n"
-        f"🎯 **TP:** `{tp:.4f}` (+{tp_pct:.1f}%)\n"
-        f"⚖️ **R:R:** `1:{rr}`\n\n"
-        f"📊 **النقاط:** {score:.1f}/10\n"
-        f"📈 **RSI:** {rsi:.0f} | **ADX:** {adx:.0f}\n"
-        f"🔍 **المصادر:** {src}\n\n"
+        f"📍 <b>Entry:</b> <code>{entry:.4f}</code>\n"
+        f"🛡 <b>SL:</b> <code>{sl:.4f}</code> (-{sl_pct:.1f}%)\n"
+        f"🎯 <b>TP:</b> <code>{tp:.4f}</code> (+{tp_pct:.1f}%)\n"
+        f"⚖️ <b>R:R:</b> 1:{rr}\n\n"
+        f"📊 <b>Score:</b> {score:.1f}/10\n"
+        f"📈 RSI: {rsi:.0f} | ADX: {adx:.0f}\n"
+        f"🔍 <b>Sources:</b> {src}\n\n"
         f"⏰ {now}\n"
-        f"⚠️ _هذه إشارة اختبار — ليست توصية استثمارية_"
+        f"<i>Test signal — not financial advice</i>"
     )
 
 # ── تتبع الإشارات (في الذاكرة) ──────────────────────────────
@@ -226,7 +225,7 @@ async def run_scanner(bot: Bot):
                 await bot.send_message(
                     chat_id=TEST_CHANNEL_ID,
                     text=msg,
-                    parse_mode="Markdown"
+                    parse_mode="HTML"
                 )
                 active_signals[key] = sig
                 signals_sent += 1
@@ -251,7 +250,7 @@ async def run_scanner(bot: Bot):
             f"النتيجة: **{result}**"
         )
         try:
-            await bot.send_message(chat_id=TEST_CHANNEL_ID, text=msg, parse_mode="Markdown")
+            await bot.send_message(chat_id=TEST_CHANNEL_ID, text=msg, parse_mode="HTML")
         except: pass
 
     return signals_sent
@@ -285,19 +284,19 @@ async def main():
     await bot.send_message(
         chat_id=TEST_CHANNEL_ID,
         text=(
-            "🚀 **DEVEL_MASTER Test Bot** — تشغيل!\n\n"
-            f"⚙️ الإعدادات:\n"
-            f"  - TF: 4H\n"
-            f"  - Min Score: {MIN_SCORE}\n"
-            f"  - Futures RR: 1:{RR_FUTURES}\n"
-            f"  - Spot RR: 1:{RR_SPOT}\n"
-            f"  - Futures: {'✅' if ENABLE_FUTURES else '❌'}\n"
-            f"  - Spot: {'✅' if ENABLE_SPOT else '❌'}\n"
-            f"  - عدد العملات: {len(SYMBOLS)}\n"
-            f"  - مسح كل: {SCAN_INTERVAL_H} ساعات\n\n"
-            "انتظر أول نتائج..."
+            "<b>DEVEL_MASTER Test Bot</b> started!\n\n"
+            "Settings:\n"
+            f"  TF: 4H\n"
+            f"  Min Score: {MIN_SCORE}\n"
+            f"  Futures RR: 1:{RR_FUTURES}\n"
+            f"  Spot RR: 1:{RR_SPOT}\n"
+            f"  Futures: {'on' if ENABLE_FUTURES else 'off'}\n"
+            f"  Spot: {'on' if ENABLE_SPOT else 'off'}\n"
+            f"  Symbols: {len(SYMBOLS)}\n"
+            f"  Scan every: {SCAN_INTERVAL_H}h\n\n"
+            "Waiting for first scan..."
         ),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
     while True:
